@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chronique d'une IA</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="game">
+    <h1>Aventure auto-générée ⚔️</h1>
+    <div id="character">
+      <img id="character-img" src="/images/persos/tavernier.gif" alt="Interlocuteur" />
+    </div>
+
+    <div id="game-ui" style="display: none;">
+      <div id="narration">Génération du monde...</div>
+    </div>
+
+    <div id="start-screen">
+      <p>Le jeu 100% généré par IA</p>
+      <button id="start-btn">Commencer l'aventure</button>
+    </div>
+
+    <div id="choices"></div>
+
+    <audio id="type-sound" src="sounds/type.mp3" preload="auto"></audio>
+    <audio id="hover-sound" src="sounds/click.wav" preload="auto"></audio>
+  </div>
+
+  <script>
+    const webhookUrl = 'https://demo-n8n.labo.asp-public.fr/webhook/d5342041-5b3e-4941-be3a-84f251a1cd4d';
+
+    let dotsIntervalId = null;
+
+    function animateDots(elementId, baseText = "Génération du monde", maxDots = 3, interval = 500) {
+      const el = document.getElementById(elementId);
+      let dots = 0;
+
+      // On s'assure de clear l'ancien interval si jamais
+      if (dotsIntervalId !== null) {
+        clearInterval(dotsIntervalId);
+      }
+
+      dotsIntervalId = setInterval(() => {
+        dots = (dots + 1) % (maxDots + 1); // 0,1,2,3 puis revient à 0
+        el.textContent = baseText + '.'.repeat(dots);
+      }, interval);
+    }
+
+    async function sendAction(action) {
+      disableAllButtons();
+      try {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+
+        // Dès qu'on reçoit la réponse, on stoppe l'animation des points
+        if (dotsIntervalId !== null) {
+          clearInterval(dotsIntervalId);
+          dotsIntervalId = null;
+        }
+
+        const formated = await response.json();
+        const outputRaw = formated.output || '';
+
+        // Cherche un bloc JSON encadré par ```json ... ```
+        const match = outputRaw.match(/```json\s*([\s\S]+?)\s*```/);
+
+        let rawJson;
+        if (match) {
+          rawJson = match[1].trim();
+        } else {
+          // Pas de bloc markdown, on suppose que outputRaw est un JSON brut
+          rawJson = outputRaw.trim();
+        }
+
+        // Nettoie quelques mauvais échappements courants (adaptable)
+        rawJson = rawJson
+          .replace(/\\'/g, "'")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\')
+          .replace(/\\n/g, '\n')
+          .replace(/\\r/g, '')
+          .replace(/\\t/g, '\t');
+
+        let jsonObject;
+        try {
+          jsonObject = JSON.parse(rawJson);
+
+          // Parfois, double encodage
+          if (typeof jsonObject === 'string') {
+            jsonObject = JSON.parse(jsonObject);
+          }
+        } catch (error) {
+          console.error("Contenu JSON extrait :", rawJson);
+          throw new Error("JSON invalide : " + error.message);
+        }
+
+        console.log(jsonObject);
+        updateUI(jsonObject);
+
+      } catch (error) {
+        document.getElementById('narration').textContent = 'Erreur : ' + error.message;
+        document.getElementById('choices').innerHTML = '';
+      }
+    }
+
+    function updateUI(data) {
+      typeWriter(data.output || "Pas de narration.");
+
+      const choicesContainer = document.getElementById('choices');
+      choicesContainer.innerHTML = '';
+
+      // Met à jour le <h1> avec le nom du lieu
+      const titleElement = document.querySelector('h1');
+      if (titleElement) {
+        titleElement.innerText = data.lieu || "Lieu inconnu";
+      }
+
+      setAmbientSound(data.lieu);
+
+      if (data.choix && Array.isArray(data.choix)) {
+        data.choix.forEach(choice => {
+          const btn = document.createElement('button');
+          btn.textContent = choice;
+          btn.onclick = () => sendAction(choice);
+          choicesContainer.appendChild(btn);
+        });
+      } else {
+        choicesContainer.innerHTML = "<em>Aucun choix disponible.</em>";
+      }
+
+      // Background image or fallback
+      const lieu = (data.lieu || '').toLowerCase();
+      const game = document.getElementById('game');
+      const bgImg = new Image();
+      bgImg.src = `images/lieux/${lieu}.jpg`;
+      bgImg.onload = () => {
+        game.style.backgroundImage = `url('${bgImg.src}')`;
+        game.style.backgroundColor = '#000';
+      };
+      bgImg.onerror = () => {
+        game.style.backgroundImage = 'none';
+        game.style.backgroundColor = getLieuColor(lieu);
+      };
+
+      // Interlocuteur image
+      const perso = (data.interlocuteur || '').toLowerCase();
+      const charImg = document.getElementById('character-img');
+      const charUrl = `images/persos/${perso}.png`;
+      charImg.src = charUrl;
+      charImg.onerror = () => {
+        charImg.style.display = "none";
+      };
+      charImg.onload = () => {
+        charImg.style.display = "block";
+      };
+    }
+
+    // Affichage lettre par lettre + son
+    function typeWriter(rawText, speed = 25) {
+      const container = document.getElementById('narration');
+      const audio = document.getElementById('type-sound');
+      audio.volume = 0.2;
+      container.innerHTML = '';
+
+      // Remplace [texte] par <strong>texte</strong>
+      let processedText = rawText.replace(/\[(.+?)\]/g, '<strong>$1</strong>');
+
+      // Remplace (texte) par <em>texte</em>
+      processedText = processedText.replace(/\((.+?)\)/g, '<em>$1</em>');
+
+      let i = 0;
+      function typeChar() {
+        if (i <= processedText.length) {
+          const current = processedText.slice(0, i);
+          container.innerHTML = current;
+          container.scrollTop = container.scrollHeight;
+
+          const currentChar = processedText.charAt(i - 1);
+          if (currentChar && currentChar !== ' ' && currentChar !== '\n' && currentChar !== '>') {
+            audio.currentTime = 0;
+            audio.play().catch(() => {});
+          }
+
+          i++;
+          setTimeout(typeChar, speed);
+        }
+      }
+
+      typeChar();
+    }
+
+    function disableAllButtons() {
+      document.querySelectorAll('#choices button').forEach(btn => btn.disabled = true);
+    }
+
+    function setupHoverSounds() {
+      const hoverSound = document.getElementById('hover-sound');
+      hoverSound.volume = 0.2; // Ajuste le volume comme tu veux
+
+      document.addEventListener('mouseover', (e) => {
+        if (e.target.tagName === 'BUTTON') {
+          hoverSound.currentTime = 0;
+          hoverSound.play().catch(() => {});
+        }
+      });
+    }
+
+    function getLieuColor(lieu) {
+      switch (lieu) {
+        case 'taverne': return '#5c3a21';
+        case 'forêt':
+        case 'fôret': return '#2e562e';
+        case 'plaine': return '#7cae7a';
+        case 'rue': return '#888';
+        case 'asp': return '#222';
+        default: return '#333';
+      }
+    }
+
+    let currentLieu = null; // Variable globale pour suivre le lieu actuel
+
+    function setAmbientSound(lieu) {
+      const audio = document.getElementById('ambient-sound');
+      const basePath = 'sounds/lieux/';
+      const available = ['Taverne', 'Rue', 'Fôret', 'Plaine', 'ASP'];
+
+      // Ne rien faire si le lieu n’a pas changé
+      if (lieu === currentLieu) return;
+
+      currentLieu = lieu; // Met à jour le lieu actuel
+
+      if (available.includes(lieu)) {
+        const newSrc = `${basePath}${lieu}.mp3`;
+
+        if (audio.src !== location.origin + '/' + newSrc) {
+          audio.src = newSrc;
+        }
+
+        audio.volume = 0.4;
+
+        audio.play().catch(e => {
+          console.warn('Audio autoplay bloqué : interaction requise');
+        });
+      } else {
+        audio.pause();
+        audio.src = '';
+      }
+    }
+
+    document.getElementById('start-btn').addEventListener('click', () => {
+      document.getElementById('start-screen').style.display = 'none';
+      document.getElementById('game-ui').style.display = 'block';
+      setupHoverSounds();
+
+      // Lance l’animation des points avant la première requête
+      animateDots('narration');
+
+      sendAction("Recommencer");
+    });
+  </script>
+
+  <audio id="ambient-sound" loop autoplay></audio>
+</body>
+</html>
