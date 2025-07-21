@@ -28,6 +28,7 @@
   </div>
 
   <script>
+    let sessionId = null;
     const webhookUrl = 'https://demo-n8n.labo.asp-public.fr/webhook/d5342041-5b3e-4941-be3a-84f251a1cd4d';
 
     let dotsIntervalId = null;
@@ -50,10 +51,13 @@
     async function sendAction(action) {
       disableAllButtons();
       try {
+        if (action === "Recommencer" || sessionId === null) {
+  sessionId = crypto.randomUUID(); // Crée un identifiant unique
+}
         const response = await fetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ action, sessionId }),
         });
 
         // Dès qu'on reçoit la réponse, on stoppe l'animation des points
